@@ -1,5 +1,5 @@
 const CACHE_NAME =
-"city4christ-v1";
+"city4christ-v3";
 
 
 const APP_FILES = [
@@ -16,6 +16,8 @@ const APP_FILES = [
 
     "./messages.html",
 
+    "./word.html",
+
     "./profile.html",
 
     "./events.html",
@@ -25,6 +27,12 @@ const APP_FILES = [
     "./notifications.html",
 
     "./settings.html",
+
+    "./live.html",
+
+    "./giving.html",
+
+    "./get-app.html",
 
     "./css/index.css",
 
@@ -38,6 +46,8 @@ const APP_FILES = [
 
     "./css/messages.css",
 
+    "./css/word.css",
+
     "./css/profile.css",
 
     "./css/events.css",
@@ -48,7 +58,9 @@ const APP_FILES = [
 
     "./css/settings.css",
 
-    "./css/animations.css",
+    "./css/animation.css",
+
+    "./css/services.css",
 
     "./js/app.js",
 
