@@ -1,0 +1,48 @@
+import React from "react";
+import { useNavigate } from "react-router-dom";
+import { DailyVerseCard } from "@/dailyverse/DailyVerseCard";
+import { Icon } from "@/lib/icons";
+import { useSession } from "@/auth/session";
+const tiles = [
+  ["/word", "mic", "Sermons"],
+ ["/bible", "sun", "Bible"],
+ ["/devotionals", "sun", "Devotionals"],
+  ["/profile", "users", "My profile"],
+  ["/groups", "users", "Church groups"],
+  ["/events", "cal", "Church events"],
+["/pastors", "users", "Book a pastor"],
+];
+export default function HomeScreen() {
+  const { profile } = useSession(),
+    navigate = useNavigate();
+  return (
+    <section className="screen active" aria-label="Home">
+      <h1 className="greet">Welcome, {profile.firstName}</h1>
+      <p className="lead">The House of Good News</p>
+      <DailyVerseCard />
+      <div className="sh">
+        <h2>Explore City4Christ</h2>
+      </div>
+      <div className="tiles">
+        {tiles.map(([path, icon, label]) => (
+          <button key={path} className="tile" onClick={() => navigate(path)}>
+            <span
+              style={{ background: "linear-gradient(145deg,#8a4fe0,#5a2fa8)" }}
+            >
+              <Icon name={icon} />
+            </span>
+            {label}
+          </button>
+        ))}
+      </div>
+      <button className="home-giving" type="button" onClick={() => navigate("/giving")}>
+        <span className="home-giving-icon"><Icon name="heart" fill /></span>
+        <span className="home-giving-copy"><b>Give to City4Christ</b><small>Support the church through Give A Little</small></span>
+        <Icon name="next" />
+      </button>
+      <p className="lead">
+        Sermons, community posts, church events, prayer requests and direct messages are connected.
+      </p>
+    </section>
+  );
+}

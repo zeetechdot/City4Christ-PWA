@@ -1,0 +1,339 @@
+# Connected preview handoff
+
+Set the frontend hosting environment variable:
+
+```dotenv
+API_URL=https://city4christ-staging-api.onrender.com
+MEDIA_ORIGIN=https://<CLOUDFLARE_ACCOUNT_ID>.r2.cloudflarestorage.com
+```
+
+Use Node.js 22+, build command `npm ci && npm run build`, and publish directory
+`dist`. API_URL is a public origin without `/api/v1`, not a secret. Changing it
+requires rebuilding. Never put provider secrets, database credentials or tokens in
+the frontend environment. MEDIA_ORIGIN is the public R2 endpoint used by signed
+media URLs and must match the bucket selected for the API. For local builds copy
+`.env.example` to `.env`.
+
+The canonical app is the repository root. Older duplicate app folders are excluded
+from the build. Browser setup is documented in [browser-testing.md](browser-testing.md).
+
+## Pages and features
+
+| Page            | Connected actions                                                                        |
+| --------------- | ---------------------------------------------------------------------------------------- |
+| `auth.html`     | Register, verify OTP, resend OTP, password/Google sign-in, logout                        |
+| `profile.html`  | Own profile, names, directory visibility, session check, explicit Google linking, logout |
+| `settings.html` | Profile/privacy controls, local theme, API health                                        |
+| `word.html`     | Published sermon search, filters, pagination and detail                                  |
+| `members.html`  | Authenticated opt-in directory search and pagination; names and IDs only                 |
+| `staff.html`    | Sermon create/load/edit/publish/unpublish/schedule; role read/grant/revoke with reason   |
+| `/#/events`     | Published church event calendar, guest-count RSVP/cancellation, event management by capability |
+| `/#/prayer`     | Community, active-group and owner-only prayer requests; anonymity and acknowledgements |
+| `/#/chat`       | Participant-only direct conversations, eligible group chats, durable history, read receipts and realtime updates |
+
+The backend checks current permissions on every protected request. Staff screens
+do not confer access. Access administrators cannot appoint themselves; ministry
+scope IDs must already exist. Stale sermon versions require reloading the editor.
+Failed mutations are not blindly retried.
+
+The React home, prayer wall, church events, groups and messaging now use the API. Bookings, giving and live screens remain previews with inactive controls.
+
+## Code organization
+
+- `js/api.js`: transport, in-memory access token and session handling.
+- `js/connected.js`: page dispatch, shared navigation and logout notification.
+- `js/pages/`: separate auth, profile, sermon, member and staff controllers.
+- `js/components/`: shared pagination and role appointment controls.
+- `js/ui.js`: safe DOM, errors and form helpers.
+- `scripts/`: build and local preview server.
+- `tests/`: unit tests and separate browser scenarios.
+
+Access tokens stay in memory and protected requests use Authorization. Refresh
+cookies remain Secure and HttpOnly. Cookie-changing operations run in order and
+use Web Locks across tabs when supported. API and authenticated responses are
+excluded from service-worker caching.
+
+## Google and release prerequisites
+
+Google's callback remains the backend
+`https://city4christ-staging-api.onrender.com/api/v1/auth/google/callback`.
+The frontend supplies an allowed HTTPS `auth.html` return URL. The backend binds
+it to state/nonce/PKCE and returns there after setting a refresh cookie, without
+putting access credentials in URLs. The frontend obtains access through refresh.
+An existing password account requires explicit linking from a freshly signed-in
+profile; matching email never silently links it.
+
+Allow the frontend's exact HTTPS origin in backend CORS. Cross-site refresh depends
+on the browser accepting the backend cookie; third-party-cookie restrictions can
+prevent it. Related frontend/API custom domains are preferable for a lasting setup.
+
+Release the backend directory and Google browser-return migrations before the
+updated frontend. These changes remain local until explicitly pushed and deployed.
+Review the two repositories separately.
+
+## Password recovery
+
+The sign-in page includes Forgot password and an emailed-link reset form. Requests use `POST /api/v1/auth/password/forgot` with `{email, returnTo}` and `POST /api/v1/auth/password/reset` with `{token, password}`. The existing `API_URL` is sufficient; no additional frontend environment variable is needed. The API must allowlist this frontend HTTPS origin. Links expire in 15 minutes and are single-use. The token travels in the URL fragment and is removed from the current history entry on initialization, then retained only in memory. Reopen the email link after a page reload. A reset revokes all sessions and asks the user to sign in again. Google-only accounts continue using Google. Release the backend migration and updated email worker before this frontend.
+
+## Current permissions
+
+`GET /api/v1/me/access` returns the authenticated caller’s `{roles, capabilities}` with exact scopes. It requires a Bearer token and has no query parameters. The preview keeps this display state in memory, refreshes it on page entry/focus or Refresh permissions, and hides staff controls when access is unavailable. An editor sees publishing; an access administrator sees role appointments. A scoped leader receives no global publishing/delegation tools. Every protected API operation still authorizes independently. Release the backend endpoint before this frontend. No additional environment variable is required.
+
+## React interface integration
+
+The responsive React interface is the root entry point (`/#/login`). It shares
+`js/api.js` with the existing connected pages: tokens stay in memory, protected
+requests use Authorization, and refresh/logout use the backend's HttpOnly cookie.
+There is still only one public hosting variable, `API_URL`. `npm run build` now
+builds the React bundle and preserves all connected HTML pages in `dist/`.
+The CSP uses the configured API origin instead of a hardcoded staging hostname.
+
+Connected React routes:
+
+- `/#/signup` → `/#/verify`: real registration, eight-digit OTP and resend.
+- `/#/login`: password login and Google login through the existing callback page.
+- `/#/forgot-password`: recovery email; reset links still use `auth.html`.
+- `/#/home` and `/#/profile`: restored sessions, actual member identity, profile
+  changes, directory opt-in and confirmed logout.
+- `/#/word`: public sermon listing, search, pagination and detail.
+
+Profile links retain the existing account-security, member-directory and staff
+workflows. Google callbacks return to the already allowed `auth.html`; its signed-in
+panel links back to the React home. No additional Google redirect URI is needed.
+Staff navigation is shown according to current capabilities; backend authorization
+remains authoritative for every request.
+
+Groups, prayer and events use their implemented API flows. Onboarding does not
+send requests to a nonexistent endpoint and remains a separate domain slice.
+
+The original React integration (PR4) did not include fresh authentication/MFA and
+needed no backend change. The subsequent protected church-appointment feature below
+now integrates those security controls and requires backend1.10/migration17 first.
+
+Development uses Node 22 and `npm run dev` (Vite); `.env`/hosting `API_URL` works
+for both development and production builds. Backend CORS must allow the exact
+frontend origin. Cross-site cookie restrictions and real Google acceptance remain
+browser/provider checks; automated tests do not claim Safari or live-provider coverage.
+
+## Protected church appointments (feature branch)
+
+The React profile retains its Staff tools link to the connected `staff.html` page.
+Church appointments use a separate section from legacy editor appointments:
+
+- `roles.read` exposes bounded authorized name/email candidate lookup and church-role reads.
+- `roles.privileged.manage` exposes Super Admin, Assistant Pastor, Staff and Finance Officer appointments.
+- `roles.operational.manage` exposes registered-ministry leader appointments only.
+
+The candidate endpoint is `GET /api/v1/admin/role-candidates?query=...&limit=20&cursor=...`. Search requires 3–100 trimmed characters. Selected account IDs are used with `/api/v1/admin/accounts/{id}/church-roles` and its `/revoke` action. Mutation bodies contain `{role,scope,reason}`. Privileged target appointments require confirmed MFA. Browser restrictions are display assistance; the API independently authorizes every request. No bootstrap or self-grant exists. A Super Admin may explicitly revoke their own Super Admin appointment only when the server confirms another active Super Admin remains.
+
+Writes require both fresh primary identity and authenticator confirmation. A `reauthentication_required` or `mfa_required` response asks the user to complete security confirmation and explicitly review/resubmit; the original action is never automatically replayed. Candidate query changes, access invalidation and page exit clear selected private data. Passwords, authenticator seeds and backup codes remain outside browser storage.
+
+Deploy the backend church-role contract before releasing this frontend. `API_URL` remains the only frontend environment setting. This feature documentation is not evidence of a staging deployment or privileged appointment.
+
+## Staff member lookup
+
+Staff can open the read-only member lookup from their profile or at
+`/#/admin/members`. The frontend checks the current `members.records.read`
+capability for display; the API independently checks it on every request.
+Search uses `GET /api/v1/admin/members?query=...&limit=20&cursor=...`, with a
+minimum three-character query and cursor pagination. Results contain a member's
+name, email and join date. This screen does not edit accounts or display
+password, MFA, role, session, phone, address, or other private profile fields.
+Full member detail and sensitive-read audit workflows are still future work.
+
+## Connected member features
+
+- Events use public published church-wide reads and verified member RSVP. Each
+  account has one RSVP with 1–10 attendees; capacity is checked transactionally.
+  Event managers need `events.manage`. The React calendar supports registration,
+  cancellation and event drafting/publication. Group events and calendar export
+  remain future work.
+- Prayer requests support church community, active group and owner-only visibility.
+  Anonymous requests hide the author from other members; only owners may mark
+  their request answered or archived. Moderation, expiry, comments, uploads and
+  notifications remain future work.
+- Direct messages are one-to-one and visible only to their participants. Any
+  verified member can start a chat using the existing opt-in directory. There is
+  no staff backdoor. Group chats are restricted by current group eligibility;
+  direct and group chat use realtime message notifications with REST history for
+  durable catch-up.
+
+### Realtime messaging
+
+The React chat requests `POST /api/v1/realtime/tickets` with the active Bearer
+session, then opens `wss://<API_URL>/api/v1/realtime`. It sends the opaque,
+single-use ticket in the first JSON WebSocket frame; the ticket is never placed
+in a URL. The client fetches a new ticket for each connection and uses bounded
+automatic reconnects. After every connection and message event it refreshes the
+relevant REST conversation list/history, merging messages by ID and sequence.
+WebSocket events contain message metadata only, so REST remains the source of
+message content and reconnect recovery. Logging out or losing the session closes
+the client connection. `API_URL` remains the only required frontend environment
+variable; the backend must allow the frontend's exact origin and have realtime
+transport enabled before release. This frontend change is local and is not yet
+deployed to the preview.
+
+The React notification bell links to `/#/notifications`. The inbox and unread badge use the same public `API_URL`; no additional frontend environment variable is needed. Notices are private to the signed-in account. Email, SMS, push, broadcasts and domain-event generation are separate follow-up work.
+
+The React church feed reads `GET /api/v1/posts`, supports scanned media,
+per-member Amen reactions, and paginated comments at
+`GET /api/v1/posts/{postId}/comments`. Verified members add comments with
+`POST /api/v1/posts/{postId}/comments` and can delete only their own comments
+with `DELETE /api/v1/posts/{postId}/comments/{commentId}`. Comments are visible
+church-wide to signed-in members; leaders’ moderation actions remain a separate
+backend slice.
+
+## React Google sign-in and linking
+
+The main React login uses `/oauth/auth.html` as its frontend return page. Linking
+starts directly from the React profile and uses `/account/auth.html`. Both pages
+load the same React bundle and restore access through the HttpOnly refresh cookie;
+there is no token in the redirect URL. Only known error codes are forwarded into
+React routing. Existing `auth.html` and `profile.html` remain advanced test-console
+pages for recovery, MFA and staff workflows; normal React Google flows no longer
+navigate through them.
+
+An existing local account must sign in and explicitly choose **Link Google** on
+its profile. Expired confirmation can be renewed with the current password in the
+same React page. Google-only accounts use Google confirmation; accounts requiring
+MFA must confirm an authenticator code. These controls never bypass backend checks.
+
+The registered Google OAuth redirect URI remains the backend
+`/api/v1/auth/google/callback`; no Google Console change is needed for these frontend
+return pages. Deploy the frontend build to make this routing fix available live.
+The UI regression is part of frontend CI. The optional backend browser harness
+also runs `google-real.spec.mjs` with synthetic Google identities and disposable
+PostgreSQL; actual Google consent/account access still needs private live acceptance.
+
+Local verification for this fix: 38 frontend unit tests and the build passed;
+10 Google UI browser cases passed across desktop/mobile; 20 existing React/preview
+browser cases passed; four real Go/PostgreSQL Google workflows passed using the
+synthetic provider. The initial missing-link/wrong-interface cases were reproduced
+as failing tests before implementation. No real Google account was linked by these
+checks. Actual provider consent remains a live release acceptance step.
+
+
+## Pastoral appointments
+
+`/#/pastors` is linked from Home and Profile. Members browse listed pastors and
+future available slots, request an appointment pending approval, view their own
+requests and cancel before the appointment starts. Eligible, explicitly listed
+pastors publish availability and review only their assigned queue. An unlisted
+pastor may review existing requests and withdraw unreserved slots, but cannot
+publish new slots. Super Admin directory settings require existing pastoral role
+eligibility plus fresh primary/MFA proofs on the server.
+
+The UI is split under `src/pastoral/` into directory, availability, booking list,
+protected directory form, API helpers and a bounded-list hook. The public directory
+and private queues never persist API responses or credentials in browser storage.
+Notifications link to this same React route. The first UI window is the next30days;
+calendar input times are device-local and display uses the pastor's IANA zone.
+
+There is no free-text care-purpose/note field, recurring calendar, reassignment or
+email reminder in this slice. These are separate policy/implementation steps.
+Backend migrations39–40 and the new API must be released before enabling the new
+frontend in staging; neither repository seeds an administrator or pastor.
+
+Browser coverage is in `pastoral.spec.mjs`, `pastoral-listing.spec.mjs` and the
+optional `pastoral-real.spec.mjs`. The real suite uses isolated member/pastor browser
+contexts, the global Go app and disposable PostgreSQL; no live care data is used.
+
+
+### Devotionals
+
+The member screen is `/#/devotionals`, linked from Home and Word. Its published
+catalog/detail calls use `/api/v1/devotionals`; editorial create/list/detail/PATCH
+calls use `/api/v1/admin/devotionals`. The existing authenticated client sends
+Authorization and handles session refresh. Editorial rendering requires the global
+`devotionals.manage` capability, independently checked again by the server.
+
+Ship the permission-parser compatibility for this capability before the backend
+advertises it; older strict permission parsers reject unknown capability names.
+Then apply backend migration 42/routes, and release the reader/editor interface.
+The backend contract and publication limits are in `docs/devotional-publishing.md`
+in the backend repository and OpenAPI 1.18.0.
+
+Content is plain text, escaped by React. Drafts are never fetched by member views
+or persisted in localStorage. Publication is immediate; scheduled long-form
+devotionals remain deferred. The managed Daily Verse card is described below. Save as draft withdraws a publication.
+Stale versions keep the unsaved form intact and require an explicit latest-version
+reload. Source components and transport/list helpers are split in `src/devotionals`.
+
+
+### Daily Verse (fixed GMT+1)
+
+Home reads `GET /api/v1/daily-verse`. The server chooses the church date in fixed
+UTC+01:00 and returns date, timeZone, serverTime, nextDayAt and a nullable verse.
+Use the server timestamps for rollover timing; do not select a verse from the
+phone date or carry yesterday into an empty day. Home clears old data before a
+refresh and distinguishes empty, loading and unavailable states.
+
+The editorial workflow under Devotionals uses `/api/v1/admin/daily-verses` and its
+ID detail/PATCH route, with the existing global devotionals.manage capability.
+Create a draft, then publish for its displayDate. One published verse per date is
+enforced by PostgreSQL; date conflicts require choosing another date or explicitly
+withdrawing the current publication. Stale versions retain unsaved form fields and
+require a latest-version reload. Text remains escaped, not rendered as HTML.
+
+Backend migration 43/routes must be released before this Home/editor UI. No new
+API_URL, secrets, permissions or worker configuration are required. Details are
+in the backend's docs/daily-verse.md and OpenAPI 1.19.0. Daily-verse components are
+separate under src/dailyverse; shared paginated-list state is in src/content.
+
+Bible lookup uses public `/api/v1/bible/translations` and `/api/v1/bible/passages`.
+The `/#/bible` route supports reference, translation ID, or original translation
+name query parameters. Daily Bread editors can copy a passage into a dated draft;
+saving and publishing remain explicit actions. Initial versions are WEB, WEB
+British Edition and ASV 1901. Use the existing `API_URL` setting; no provider key
+is exposed to the browser.
+
+Group content routes: `/#/groups/:groupId/posts` and `/#/groups/:groupId/events`.
+Use the existing API_URL; private calendars are downloaded with Bearer headers.
+The Notifications page includes push preferences, mark-all-read, explicit device
+opt-in and authorized broadcast draft/review/send. Browser subscription generation
+uses native APIs; VAPID private keys are never frontend settings. Missing provider
+configuration leaves the in-app inbox usable.
+
+Visitor welcome: public `/#/welcome` fetches `/api/v1/visitors/config` and posts
+consented forms to `/api/v1/visitors`; the current notice is `visitor-welcome-v2`
+and explicitly permits sharing contact details with a designated volunteer for
+that follow-up. Private `/#/visitors` uses the audited API and is linked from
+Profile for staff with `visitors.follow_up`. Staff can assign a record through
+`POST /api/v1/admin/visitors/{visitorId}/assignment`, selecting a verified active
+member through the read-only member search. Volunteers can access only assigned
+records, update follow-up status, and cannot reassign or withdraw contact data.
+Legacy v1 submissions remain staff-only. Intake is disabled until the API has
+its dedicated visitor key; the frontend uses only API_URL. Contact values stay
+in memory and are cleared on successful submission or access denial.
+
+
+Signed-in local-password changes are available in Profile through the modular
+`src/auth/ChangePasswordPanel.jsx`. The form requires the current password and a
+locally confirmed new password, then posts `currentPassword` and `newPassword` to
+`/api/v1/auth/password/change`. Success revokes every session, clears the in-memory
+access credential/profile and returns to sign-in with a confirmation. Incorrect
+current-password errors (`422 current_password_invalid`) preserve the active
+session; other failures never display success. Password inputs are not stored in
+browser storage or URLs and are reset on success/unmount. Google-only accounts
+see an explanation rather than a local-password form. Deploy the matching backend
+route before releasing this interface. No new frontend environment variables.
+
+
+Account-deletion requests are available in Profile. The panel loads the current
+policy from `GET /api/v1/me/deletion-request`, requires explicit consent and
+server-verified fresh primary authentication, plus authenticator confirmation when
+enrolled. Password/Google confirmation and MFA use existing endpoints; confirmation
+never automatically submits the action. `DELETE /api/v1/me` sends `confirm: true`
+and the current `policyVersion`. A `202` receipt disables sign-in, revokes sessions
+and hides directory visibility on the server; the browser clears its in-memory
+credentials/profile and returns to sign-in. This is a reviewed request, not proof
+of permanent data erasure. Errors retain the signed-in UI and display server guidance.
+
+Super Admin review is linked from Profile only for global `accounts.deletion.review`.
+The protected `/#/account-deletion-requests` screen uses the admin collection/detail
+routes, fresh primary confirmation and mandatory MFA. Names-only summaries and
+audited email details are separate reads; a versioned PATCH may only mark a request
+as `reviewing`. There is no permanent-erasure, approval or reactivation control.
+Permission/session loss clears displayed names and contact details. Browser tests
+use synthetic identities; the optional real API deletion case requires the disposable
+loopback harness. No new frontend configuration or secrets are required.
